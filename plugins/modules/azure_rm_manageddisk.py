@@ -126,11 +126,11 @@ options:
     zone:
         description:
             - The Azure managed disk's zone.
-            - Allowed values are C(1), C(2), C(3) and C(' ').
+            - Allowed values are C(1), C(2), C(3) and C('').
         choices:
-            - 1
-            - 2
-            - 3
+            - '1'
+            - '2'
+            - '3'
             - ''
     lun:
         description:
@@ -283,6 +283,8 @@ import re
 
 from ansible_collections.azure.azcollection.plugins.module_utils.azure_rm_common import AzureRMModuleBase
 try:
+    from concurrent.futures import ThreadPoolExecutor
+    import multiprocessing
     from msrestazure.tools import parse_resource_id
     from azure.core.exceptions import ResourceNotFoundError
 except ImportError:
@@ -456,11 +458,24 @@ class AzureRMManagedDisk(AzureRMModuleBase):
         # Mount the disk to multiple VM
         if self.managed_by_extended:
             if not self.check_mode:
+                cpu_count = multiprocessing.cpu_count()
+                executor = ThreadPoolExecutor(max_workers=cpu_count)
+                task_result = []
                 for vm_item in self.managed_by_extended:
                     vm_name_id = self.compute_client.virtual_machines.get(vm_item['resource_group'], vm_item['name'])
                     if result['managed_by_extended'] is None or vm_name_id.id not in result['managed_by_extended']:
                         changed = True
-                        self.attach(vm_item['resource_group'], vm_item['name'], result)
+                        feature = executor.submit(self.attach, vm_item['resource_group'], vm_item['name'], result)
+                        task_result.append({'task': feature, 'vm_name': vm_item['name'], 'resource_group': vm_item['resource_group']})
+                fail_attach_VM = []
+                for task_item in task_result:
+                    if task_item['task'].result() is not None:
+                        task_item['error_msg'] = task_item['task'].result()
+                        task_item.pop('task')
+                        fail_attach_VM.append(task_item)
+                if len(fail_attach_VM) > 0:
+                    self.fail("Disk mount failure, VM and Error message information: {0}".format(fail_attach_VM))
+
                 result = self.get_managed_disk()
 
         # unmount from the old virtual machine and mount to the new virtual machine
@@ -512,7 +527,7 @@ class AzureRMManagedDisk(AzureRMModuleBase):
                                                  managed_disk=params,
                                                  caching=caching_options)
         vm.storage_profile.data_disks.append(data_disk)
-        self._update_vm(resource_group, vm_name, vm)
+        return self._update_vm(resource_group, vm_name, vm)
 
     def detach(self, resource_group, vm_name, disk):
         vm = self._get_vm(resource_group, vm_name)
@@ -527,7 +542,10 @@ class AzureRMManagedDisk(AzureRMModuleBase):
             poller = self.compute_client.virtual_machines.begin_create_or_update(resource_group, name, params)
             self.get_poller_result(poller)
         except Exception as exc:
-            self.fail("Error updating virtual machine {0} - {1}".format(name, str(exc)))
+            if self.managed_by_extended:
+                return exc
+            else:
+                self.fail("Error updating virtual machine {0} - {1}".format(name, str(exc)))
 
     def _get_vm(self, resource_group, name):
         try:
@@ -551,7 +569,7 @@ class AzureRMManagedDisk(AzureRMModuleBase):
         if self.create_option == 'import':
             creation_data['create_option'] = self.compute_models.DiskCreateOption.import_enum
             creation_data['source_uri'] = self.source_uri
-            creation_data['source_account_id'] = self.storage_account_id
+            creation_data['storage_account_id'] = self.storage_account_id
         elif self.create_option == 'copy':
             creation_data['create_option'] = self.compute_models.DiskCreateOption.copy
             creation_data['source_resource_id'] = self.source_uri
@@ -619,7 +637,7 @@ class AzureRMManagedDisk(AzureRMModuleBase):
     def is_attach_caching_option_different(self, vm_name, disk):
         resp = False
         if vm_name:
-            vm = self._get_vm(vm_name)
+            vm = self._get_vm(self.resource_group, vm_name)
             correspondence = next((d for d in vm.storage_profile.data_disks if d.name.lower() == disk.get('name').lower()), None)
             caching_options = self.compute_models.CachingTypes[self.attach_caching] if self.attach_caching and self.attach_caching != '' else None
             if correspondence and correspondence.caching != caching_options:

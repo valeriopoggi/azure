@@ -40,6 +40,13 @@ options:
             - Backup Policy ID present under Recovery Service Vault mentioned in recovery_vault_name field.
         required: true
         type: str
+    recovery_point_expiry_time:
+        description:
+            - Recovery Point Expiry Time in UTC.
+            - This used if C(state) parameter is C(backup).
+        required: false
+        type: str
+        version_added: '1.15.0'
     state:
         description:
             - Assert the state of the protection item.
@@ -98,6 +105,7 @@ EXAMPLES = \
         resourceGroups/myResourceGroup/providers/Microsoft.Compute/virtualMachines/testVM'
         backup_policy_id: '/subscriptions/00000000-0000-0000-0000-000000000000/ \
         resourceGroups/myResourceGroup/providers/microsoft.recoveryservices/vaults/testVault/backupPolicies/ProdPolicy'
+        recovery_point_expiry_time: '2023-02-09T06:00:00Z'
         state: 'backup'
     '''
 
@@ -116,11 +124,6 @@ from ansible_collections.azure.azcollection.plugins.module_utils.azure_rm_common
 import re
 import json
 import time
-try:
-    from msrestazure.azure_exceptions import CloudError
-except ImportError:
-    # This is handled in azure_rm_common
-    pass
 
 
 class Actions:
@@ -146,6 +149,9 @@ class BackupAzureVM(AzureRMModuleBaseExt):
                 type='str',
                 required=True
             ),
+            recovery_point_expiry_time=dict(
+                type='str'
+            ),
             state=dict(
                 type='str',
                 default='create',
@@ -157,6 +163,7 @@ class BackupAzureVM(AzureRMModuleBaseExt):
         self.recovery_vault_name = None
         self.resource_id = None
         self.backup_policy_id = None
+        self.recovery_point_expiry_time = None
         self.state = None
 
         self.results = dict(changed=False)
@@ -211,12 +218,15 @@ class BackupAzureVM(AzureRMModuleBaseExt):
                     }
             }
         elif self.state == 'backup':
-            return {
+            body = {
                 "properties": {
-                    "objectType": "IaasVMBackupRequest",
-                    "recoveryPointExpiryTimeInUTC": ""
+                    "objectType": "IaasVMBackupRequest"
                 }
             }
+            if self.recovery_point_expiry_time:
+                body["properties"]["recoveryPointExpiryTimeInUTC"] = self.recovery_point_expiry_time
+
+            return body
         elif self.state == 'stop':
             return {
                 "properties": {
@@ -279,7 +289,7 @@ class BackupAzureVM(AzureRMModuleBaseExt):
                 600,
                 30,
             )
-        except CloudError as e:
+        except Exception as e:
             self.log('Error in enabling/updating protection for Azure VM.')
             self.fail(
                 'Error in creating/updating protection for Azure VM {0}'.format(str(e)))
@@ -306,7 +316,7 @@ class BackupAzureVM(AzureRMModuleBaseExt):
                 600,
                 30,
             )
-        except CloudError as e:
+        except Exception as e:
             self.log('Error attempting to stop protection.')
             self.fail('Error in disabling the protection: {0}'.format(str(e)))
 
@@ -332,7 +342,7 @@ class BackupAzureVM(AzureRMModuleBaseExt):
                 600,
                 30,
             )
-        except CloudError as e:
+        except Exception as e:
             self.log('Error attempting to delete backup.')
             self.fail('Error deleting the azure backup: {0}'.format(str(e)))
 
@@ -358,7 +368,7 @@ class BackupAzureVM(AzureRMModuleBaseExt):
                 600,
                 30,
             )
-        except CloudError as e:
+        except Exception as e:
             self.log('Error attempting to backup azure vm.')
             self.fail(
                 'Error while taking on-demand backup: {0}'.format(str(e)))

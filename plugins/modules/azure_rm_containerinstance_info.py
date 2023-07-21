@@ -178,6 +178,12 @@ container_groups:
                             description:
                                 - Environment variable value.
                             type: str
+        subnet_ids:
+            description:
+                - The subnet resource IDs for a container group.
+            type: list
+            returned: always
+            sample: [{'id': "/subscriptions/xxx-xxx/resourceGroups/myRG/providers/Microsoft.Network/virtualNetworks/vnetrpfx/subnets/subrpfx"}]
         volumes:
             description: The list of Volumes that can be mounted by container instances
             returned: If container group has volumes
@@ -200,10 +206,7 @@ from ansible_collections.azure.azcollection.plugins.module_utils.azure_rm_common
 from ansible.module_utils.common.dict_transformations import _camel_to_snake
 
 try:
-    from msrestazure.azure_exceptions import CloudError
-    from msrestazure.azure_operation import AzureOperationPoller
-    from azure.mgmt.containerinstance import ContainerInstanceManagementClient
-    from msrest.serialization import Model
+    from azure.core.exceptions import ResourceNotFoundError
 except ImportError:
     # This is handled in azure_rm_common
     pass
@@ -262,7 +265,7 @@ class AzureRMContainerInstanceInfo(AzureRMModuleBase):
             response = self.containerinstance_client.container_groups.get(resource_group_name=self.resource_group,
                                                                           container_group_name=self.name)
             self.log("Response : {0}".format(response))
-        except CloudError as e:
+        except ResourceNotFoundError as e:
             self.log('Could not get facts for Container Instances.')
 
         if response is not None and self.has_tags(response.tags, self.tags):
@@ -276,7 +279,7 @@ class AzureRMContainerInstanceInfo(AzureRMModuleBase):
         try:
             response = self.containerinstance_client.container_groups.list_by_resource_group(resource_group_name=self.resource_group)
             self.log("Response : {0}".format(response))
-        except CloudError as e:
+        except Exception as e:
             self.fail('Could not list facts for Container Instances.')
 
         if response is not None:
@@ -292,7 +295,7 @@ class AzureRMContainerInstanceInfo(AzureRMModuleBase):
         try:
             response = self.containerinstance_client.container_groups.list()
             self.log("Response : {0}".format(response))
-        except CloudError as e:
+        except Exception as e:
             self.fail('Could not list facts for Container Instances.')
 
         if response is not None:
@@ -342,6 +345,7 @@ class AzureRMContainerInstanceInfo(AzureRMModuleBase):
             'containers': containers,
             'restart_policy': _camel_to_snake(d.get('restart_policy')) if d.get('restart_policy') else None,
             'tags': d.get('tags', None),
+            'subnet_ids': d.get('subnet_ids', None),
             'volumes': d['volumes'] if 'volumes' in d else []
         }
         return d
